@@ -733,9 +733,6 @@ elseif(BUILD_ENV_UNIXLIKE AND NOT BUILD_TARGET_WIN)
         DESTINATION bin
     )
 
-    # No launcher script needed anymore (see RPATH/seeding changes above);
-    # install the real binaries and symlink opentoonz -> OpenToonz so the
-    # .desktop file's Exec=opentoonz keeps working.
     install(
         PROGRAMS
             "$<TARGET_FILE:tcleanup>"
@@ -746,6 +743,7 @@ elseif(BUILD_ENV_UNIXLIKE AND NOT BUILD_TARGET_WIN)
         DESTINATION bin
     )
 
+    # lowercase symlink so the .desktop file's Exec=opentoonz keeps working
     install(CODE "
       file(REMOVE \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/bin/opentoonz\")
       execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink

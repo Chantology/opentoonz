@@ -629,9 +629,8 @@ TFilePath TEnv::getConfigDir() {
 #if !defined(_WIN32) && !defined(MACOSX)
 namespace {
 
-// Recursive copy that reports failure. TSystem::copyDir() ignores the result of
-// every mkdir/QFile::copy and never throws, so a partially copied tree would
-// otherwise look like a successful one.
+// Recursive copy that reports failure, unlike TSystem::copyDir(), which
+// ignores mkdir/QFile::copy failures and never throws.
 bool copyDirOrFail(const QString &dst, const QString &src) {
   if (!QDir().mkpath(dst)) return false;
 
@@ -651,13 +650,70 @@ bool copyDirOrFail(const QString &dst, const QString &src) {
   return true;
 }
 
+// installed layout: <prefix>/bin/<exe> alongside
+// <prefix>/share/opentoonz/stuff
+TFilePath getInstalledStuffDir() {
+  TFilePath exeDir(QCoreApplication::applicationDirPath().toStdWString());
+  return exeDir.getParentDir() + "share" + "opentoonz" + "stuff";
+}
+
+// Derived from the file TEnv actually reads, so this stays correct wherever
+// getSystemVarFile() places it (Haiku, for one, does not use ~/.config).
+TFilePath getUserStuffDir(EnvGlobals *eg) {
+  TFilePath systemVarFile(eg->getSystemVarFile().toStdWString());
+  return systemVarFile.getParentDir() + "stuff";
+}
+
+bool seedStuffTreeIfMissing(const TFilePath &userStuffDir) {
+  if (TFileStatus(userStuffDir).doesExist()) return true;
+
+  TFilePath installedStuffDir = getInstalledStuffDir();
+  if (!TFileStatus(installedStuffDir).isDirectory())
+    return false;  // nothing to copy from (e.g. running from the build tree)
+
+  const QString userStuffDirStr = userStuffDir.getQString();
+  const QString stagingDirStr   = userStuffDirStr + ".incomplete";
+
+  // Stage under a temporary name and rename into place only once the whole
+  // tree copied, so an interrupted or failed copy (out of space, permissions)
+  // leaves nothing behind that a later run would mistake for a complete
+  // "stuff" and skip.
+  QDir(stagingDirStr).removeRecursively();  // leftovers from a failed attempt
+  if (!copyDirOrFail(stagingDirStr, installedStuffDir.getQString()) ||
+      !QDir().rename(stagingDirStr, userStuffDirStr)) {
+    QDir(stagingDirStr).removeRecursively();
+    std::cerr << "Failed to initialize " << userStuffDirStr.toStdString()
+              << " from " << installedStuffDir.getQString().toStdString()
+              << std::endl;
+    return false;
+  }
+
+  // Folders the app expects to be able to write into but which may be absent
+  // from the packaged stuff tree (mkpath creates parents and is a no-op if
+  // they already exist).
+  QDir().mkpath((userStuffDir + "projects" + "library").getQString());
+  QDir().mkpath((userStuffDir + "projects" + "fxs").getQString());
+  return true;
+}
+
+// Only the root variable is required; every other path falls back to
+// <stuff>/<subdir> in TEnv/ToonzFolder.
+void writeInitialSystemVarIfMissing(EnvGlobals *eg,
+                                     const TFilePath &userStuffDir) {
+  QString systemVarFileStr = eg->getSystemVarFile();
+  if (TFileStatus(TFilePath(systemVarFileStr.toStdWString())).doesExist())
+    return;
+
+  QSettings settings(systemVarFileStr, QSettings::IniFormat);
+  settings.setValue(QString::fromStdString(eg->getRootVarName()),
+                     userStuffDir.getQString());
+  settings.sync();
+}
+
 }  // namespace
 #endif
 
 void TEnv::initUserStuffDir() {
-// Matches the platforms whose install rules drop the launcher script that used
-// to do this (BUILD_ENV_UNIXLIKE AND NOT BUILD_TARGET_WIN): every Unix except
-// macOS, which ships a bundle and keeps its own layout.
 #if !defined(_WIN32) && !defined(MACOSX)
   EnvGlobals *eg = EnvGlobals::instance();
 
@@ -667,61 +723,10 @@ void TEnv::initUserStuffDir() {
   // respect an explicit -TOONZROOT command-line override
   if (eg->getArgPathValue(eg->getRootVarName()) != "") return;
 
-  // installed layout: <prefix>/bin/<exe> alongside
-  // <prefix>/share/opentoonz/stuff
-  TFilePath exeDir(QCoreApplication::applicationDirPath().toStdWString());
-  TFilePath installedStuffDir =
-      exeDir.getParentDir() + "share" + "opentoonz" + "stuff";
-
-  // Derive both paths from the file TEnv actually reads, so this stays correct
-  // wherever getSystemVarFile() places it (Haiku, for one, does not use
-  // ~/.config).
-  QString systemVarFileStr = eg->getSystemVarFile();
-  TFilePath systemVarFile(systemVarFileStr.toStdWString());
-  TFilePath configDir    = systemVarFile.getParentDir();
-  TFilePath userStuffDir = configDir + "stuff";
-
-  if (!QDir().mkpath(configDir.getQString())) return;
-
-  // 1. Seed the writable stuff tree from the installed read-only copy. Stage it
-  //    under a temporary name and rename into place only once the whole tree
-  //    copied, so an interrupted or failed copy (out of space, permissions)
-  //    leaves nothing behind that a later run would mistake for a complete
-  //    "stuff" and skip. On failure the staging dir is removed and we bail out
-  //    without writing SystemVar.ini, so the next launch retries from scratch.
-  if (!TFileStatus(userStuffDir).doesExist()) {
-    if (!TFileStatus(installedStuffDir).isDirectory())
-      return;  // nothing to copy from (e.g. running from the build tree)
-
-    const QString userStuffDirStr = userStuffDir.getQString();
-    const QString stagingDirStr   = userStuffDirStr + ".incomplete";
-
-    QDir(stagingDirStr).removeRecursively();  // leftovers from a failed attempt
-    if (!copyDirOrFail(stagingDirStr, installedStuffDir.getQString()) ||
-        !QDir().rename(stagingDirStr, userStuffDirStr)) {
-      QDir(stagingDirStr).removeRecursively();
-      std::cerr << "Failed to initialize "
-                << userStuffDirStr.toStdString()
-                << " from " << installedStuffDir.getQString().toStdString()
-                << std::endl;
-      return;
-    }
-  }
-
-  // Folders the app expects to be able to write into but which may be absent
-  // from the packaged stuff tree (mkpath creates parents and is a no-op if
-  // they already exist).
-  QDir().mkpath((userStuffDir + "projects" + "library").getQString());
-  QDir().mkpath((userStuffDir + "projects" + "fxs").getQString());
-
-  // 2. Write a minimal SystemVar.ini. Only the root variable is required;
-  //    every other path falls back to <stuff>/<subdir> in TEnv/ToonzFolder.
-  if (!TFileStatus(systemVarFile).doesExist()) {
-    QSettings settings(systemVarFileStr, QSettings::IniFormat);
-    settings.setValue(QString::fromStdString(eg->getRootVarName()),
-                      userStuffDir.getQString());
-    settings.sync();
-  }
+  TFilePath userStuffDir = getUserStuffDir(eg);
+  if (!QDir().mkpath(userStuffDir.getParentDir().getQString())) return;
+  if (!seedStuffTreeIfMissing(userStuffDir)) return;
+  writeInitialSystemVarIfMissing(eg, userStuffDir);
 #endif
 }
 
