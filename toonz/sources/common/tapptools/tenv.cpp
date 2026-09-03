@@ -84,8 +84,7 @@ public:
     return QString::fromStdString(getApplicationFileName()) + QString(".app") +
            QString("/Contents/Resources/SystemVar.ini");
 #elif defined(HAIKU)
-    return QStandardPaths::writableLocation(
-               QStandardPaths::AppConfigLocation) +
+    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
            "/SystemVar.ini";
 #else /* Generic Unix */
     // TODO: use QStandardPaths::ConfigLocation when we drop Qt4
@@ -634,9 +633,8 @@ namespace {
 bool copyDirOrFail(const QString &dst, const QString &src) {
   if (!QDir().mkpath(dst)) return false;
 
-  const QFileInfoList entries =
-      QDir(src).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot |
-                              QDir::Hidden | QDir::System);
+  const QFileInfoList entries = QDir(src).entryInfoList(
+      QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
   for (const QFileInfo &fi : entries) {
     const QString target = dst + "/" + fi.fileName();
     // symlinks are copied as plain files rather than followed, so a cyclic
@@ -699,14 +697,14 @@ bool seedStuffTreeIfMissing(const TFilePath &userStuffDir) {
 // Only the root variable is required; every other path falls back to
 // <stuff>/<subdir> in TEnv/ToonzFolder.
 void writeInitialSystemVarIfMissing(EnvGlobals *eg,
-                                     const TFilePath &userStuffDir) {
+                                    const TFilePath &userStuffDir) {
   QString systemVarFileStr = eg->getSystemVarFile();
   if (TFileStatus(TFilePath(systemVarFileStr.toStdWString())).doesExist())
     return;
 
   QSettings settings(systemVarFileStr, QSettings::IniFormat);
   settings.setValue(QString::fromStdString(eg->getRootVarName()),
-                     userStuffDir.getQString());
+                    userStuffDir.getQString());
   settings.sync();
 }
 
